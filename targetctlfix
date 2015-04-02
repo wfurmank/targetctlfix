@@ -1,0 +1,51 @@
+#!/bin/sh
+
+# Apr 2nd 2015 by Wojciech Furmankierwicz wfurmank@redhat.com
+# This is /usr/bin/targetctlfix script, a fix for targetd.service losing config after reboot.
+# Tested on RHEL 7.1 with:
+#   python-rtslib-2.1.fb50-1.el7.noarch
+#   targetcli-2.1.fb37-3.el7.noarch
+#   targetd-0.7.1-1.el7.noarch
+# Instructions:
+# Configure iscsi targets with targetcli so you have /etc/target/saveconfig.json correctly populated.
+# Place this script into /usr/bin/targetctlfix file
+# Replace all (both) /usr/bin/targetctl commands with /usr/bin/targetctlfix in /usr/lib/systemd/system/target.service
+# Reboot the system
+
+# Get devices list
+devs=`grep dev /etc/target/saveconfig.json | cut -d'"' -f4 | xargs echo`
+
+case $1 in
+  restore)
+    # Check if the devices are zeroed
+    for dev in $devs ;do
+      dd if=$dev bs=1M count=10 | cksum | grep -q 248556017 || echo Device $dev has LVM header which prevents target.service from using it. You may consider executing: $0 clear
+    done
+
+    # Run original ExecStart entry from target.service script
+    /usr/bin/targetctl restore
+
+    # Restore original LVM headers
+    for dev in $devs ;do
+      dumpfile=/root/`echo $dev | sed 's:/:_:g'` 
+      dd if=$dumpfile of=$dev bs=1M count=10
+    done
+  ;;
+
+  clear)
+    # Wipe LVM headers on shudwon
+    logger $0 Clearing up headers
+    for dev in $devs ;do
+      dumpfile=/root/`echo $dev | sed 's:/:_:g'` 
+      if dd if=$dev bs=1M count=10 | cksum | grep -q 248556017 ;then
+        echo Device $dev already zeroed
+      else
+        dd if=$dev of=$dumpfile bs=1M count=10 
+        dd if=/dev/zero of=$dev bs=1M count=10 
+      fi
+    done
+
+    # Run original ExecStop entry from target.service script
+    /usr/bin/targetctl clear
+  ;;
+esac
